@@ -64,3 +64,25 @@ gather-scatter step is memory-bandwidth bound and there is clearly headroom in i
 profiling comes before writing a kernel, not after.
 
 `torch.compile` has not been validated and is not claimed to work.
+
+## Training when scatter activations dominate
+
+`scatter` retains two `[edges, batch]` tensors per recurrent step. The optional
+`sparse_trainable` backend performs the same CSR forward as `sparse_mm`, then uses
+sampled dense-dense multiplication to compute gradients only at existing edge
+coordinates. Its estimated saved backend state is `[nodes, batch]` per step.
+
+The benchmark script includes this backend. It remains opt-in because runtime
+crossovers depend on graph size, batch size, device and PyTorch version:
+
+```python
+model = ct.nn.ConnectomeRNN(                           # doctest: +SKIP
+    brain, weights="trainable", backend="sparse_trainable"
+)
+```
+
+On an RTX 5090 with torch 2.14.0+cu130, N=100,000, one million edges and batch
+32, `sparse_trainable` took 0.461 ms and peaked at 0.123 GiB for one
+forward+backward step. `scatter` took 1.489 ms and 0.459 GiB. At N=10,000 and
+batch 1, `scatter` remained faster: 0.218 ms against 0.320 ms. The complete run
+is stored in `benchmarks/rtx5090-sparse-trainable.jsonl`.

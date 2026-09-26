@@ -116,7 +116,8 @@ class ConnectomeRNN(nn.Module):
     bias:
         Add a per-neuron learnable bias inside the activation.
     backend:
-        ``"auto"``, ``"scatter"``, ``"sparse_mm"``, ``"dense"`` or ``"metal_csr"``. ``"auto"``
+        ``"auto"``, ``"scatter"``, ``"sparse_mm"``, ``"sparse_trainable"``,
+        ``"dense"`` or ``"metal_csr"``. ``"auto"``
         selects ``"scatter"`` when the weights are trainable, because the backward
         pass of sparse matrix multiplication materialises a dense ``[N, N]``
         gradient, and ``"sparse_mm"`` otherwise. The forward advantage of
@@ -460,7 +461,7 @@ class ConnectomeRNN(nn.Module):
                 setattr(self, name, state[name])
 
     def activation_bytes(self, batch: int, steps: int) -> int:
-        """Estimate saved per-edge/batch activations, not total training memory.
+        """Estimate saved backend activations, not total training memory.
 
         The scatter training path stores two ``[num_edges, batch]`` tensors
         per recurrent step for the backward pass, the gathered
@@ -471,21 +472,20 @@ class ConnectomeRNN(nn.Module):
         which is linear in everything and easy to walk into. On MaleCNS
         (25,563,197 connections) a batch of 32 over 16 steps wants about 104 GiB.
 
-        Returns zero when no gradient is being recorded or when the backend
-        avoids saved per-edge/batch tensors, as ``metal_csr`` does. Neuron states,
-        edge values, gradients, topology, and other workspace still consume memory.
+        ``sparse_trainable`` instead conservatively counts one saved
+        ``[num_nodes, batch]`` state per recurrent step. Backends such as
+        ``metal_csr`` can report zero for this estimate. Neuron states, edge
+        values, gradients, topology, and other workspace still consume memory.
+
+        Returns zero when no gradient is being recorded.
         """
         trains = any(p.requires_grad for p in self.weights.parameters())
-        if not (
-            trains and torch.is_grad_enabled() and self.propagator.saves_edge_batch_activations
-        ):
+        if not (trains and torch.is_grad_enabled()):
             return 0
-        return (
-            2
-            * self.num_edges
-            * batch
-            * steps
-            * torch.empty((), dtype=self.weights.dtype).element_size()
+        return self.propagator.activation_bytes(
+            batch,
+            steps,
+            torch.empty((), dtype=self.weights.dtype).element_size(),
         )
 
     def _warn_if_activations_are_huge(self, batch: int, steps: int) -> None:
@@ -495,9 +495,8 @@ class ConnectomeRNN(nn.Module):
             return
         gib = needed / 2**30
         warnings.warn(
-            f"this backward pass will hold about {gib:,.1f} GiB of per-edge "
-            f"activations ({self.num_edges:,} edges x batch {batch} x {steps} "
-            "steps x 2 tensors).\n"
+            f"this backward pass will hold about {gib:,.1f} GiB of backend "
+            f"activations ({self.propagator.activation_summary(batch, steps)}).\n"
             "Reduce batch or steps, run inference under torch.no_grad(), or train "
             "in segments by passing the returned state into the next call.",
             stacklevel=3,
@@ -539,10 +538,11 @@ class ConnectomeRNN(nn.Module):
                 "max_abs_row_sum": float(row_sum.max()),
                 "max_delay": self.max_delay,
                 "leak_groups": len(self.leak_by) if self.leak_by is not None else 0,
-                "activation_bytes_per_batch_step": int(self.propagator.saves_edge_batch_activations)
-                * 2
-                * self.num_edges
-                * torch.empty((), dtype=self.weights.dtype).element_size(),
+                "activation_bytes_per_batch_step": self.propagator.activation_bytes(
+                    1,
+                    1,
+                    torch.empty((), dtype=self.weights.dtype).element_size(),
+                ),
             }
 
     def extra_repr(self) -> str:

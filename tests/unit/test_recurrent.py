@@ -11,7 +11,7 @@ import torch
 from connectorch import Connectome
 from connectorch.nn import ConnectomeRNN
 
-BACKENDS = ["dense", "sparse_mm", "scatter"]
+BACKENDS = ["dense", "sparse_mm", "sparse_trainable", "scatter"]
 CUDA = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 
 
@@ -316,6 +316,9 @@ def test_activation_cost_is_reported_and_is_zero_without_gradients(small: Connec
     frozen = ConnectomeRNN(small, weights="weight")
     assert frozen.activation_bytes(8, 4) == 0, "frozen weights store no activations"
 
+    sparse = ConnectomeRNN(small, weights="trainable", backend="sparse_trainable")
+    assert sparse.activation_bytes(8, 4) == small.num_nodes * 8 * 4 * itemsize
+
 
 def test_a_huge_backward_pass_is_flagged_before_it_is_paid(small: Connectome, monkeypatch) -> None:
     """The warning has to carry the real number and a way out, like the dense guard.
@@ -353,6 +356,8 @@ def test_a_huge_backward_pass_is_flagged_before_it_is_paid(small: Connectome, mo
 def test_diagnostics_reports_the_activation_cost(small: Connectome) -> None:
     report = ConnectomeRNN(small, weights="trainable").diagnostics()
     assert report["activation_bytes_per_batch_step"] == 2 * small.num_edges * 4
+    sparse = ConnectomeRNN(small, weights="trainable", backend="sparse_trainable").diagnostics()
+    assert sparse["activation_bytes_per_batch_step"] == small.num_nodes * 4
 
 
 def test_a_saved_checkpoint_round_trips_through_torch_save(small: Connectome, tmp_path) -> None:

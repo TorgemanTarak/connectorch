@@ -10,7 +10,7 @@ from connectorch import Connectome, ConnectorchMemoryError
 from connectorch.backends import build_propagator
 from connectorch.nn import ConnectomeRNN
 
-BACKENDS = ["dense", "sparse_mm", "scatter"]
+BACKENDS = ["dense", "sparse_mm", "sparse_trainable", "scatter"]
 CUDA = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 
 
@@ -49,7 +49,7 @@ def test_backends_agree_on_forward(num_nodes: int, dtype: torch.dtype) -> None:
     tolerance = 1e-6 if dtype is torch.float32 else 1e-12
 
     reference = propagate("dense", brain, h, w)
-    for backend in ("sparse_mm", "scatter"):
+    for backend in ("sparse_mm", "sparse_trainable", "scatter"):
         got = propagate(backend, brain, h, w)
         assert torch.allclose(got, reference, atol=tolerance), backend
 
@@ -66,8 +66,20 @@ def test_backends_agree_on_gradients(num_nodes: int) -> None:
         propagate(backend, brain, h, w).square().sum().backward()
         grads[backend] = w.grad
 
-    for backend in ("sparse_mm", "scatter"):
+    for backend in ("sparse_mm", "sparse_trainable", "scatter"):
         assert torch.allclose(grads[backend], grads["dense"], atol=1e-10), backend
+
+
+def test_sparse_trainable_state_gradient_agrees_with_dense() -> None:
+    brain = random_connectome(30, 0.1, seed=91)
+    weight = torch.as_tensor(brain.edge_attribute("weight"), dtype=torch.float64)
+    initial_state = torch.randn(30, 5, dtype=torch.float64)
+    gradients = {}
+    for backend in ("dense", "sparse_trainable"):
+        state = initial_state.clone().requires_grad_(True)
+        propagate(backend, brain, state, weight).square().sum().backward()
+        gradients[backend] = state.grad
+    assert torch.allclose(gradients["sparse_trainable"], gradients["dense"], atol=1e-10)
 
 
 def test_shuffled_input_order_does_not_change_the_result() -> None:
@@ -131,6 +143,12 @@ def test_auto_picks_scatter_for_training_and_sparse_mm_for_inference() -> None:
     assert ConnectomeRNN(brain, weights="weight").backend == "sparse_mm"
 
 
+def test_sparse_trainable_accepts_a_large_trainable_graph() -> None:
+    edge_index = _tiny_edge_index()
+    propagator = build_propagator("sparse_trainable", edge_index, 166_691, trainable=True)
+    assert propagator.backend_name == "sparse_trainable"
+
+
 def test_unknown_backend_names_the_alternatives() -> None:
     brain = random_connectome(10, 0.2, seed=5)
     with pytest.raises(Exception, match="unknown backend"):
@@ -153,7 +171,21 @@ def test_backends_agree_on_cuda(backend: str) -> None:
     assert torch.allclose(propagate(backend, brain, h, w), reference, atol=1e-4)
 
 
-def test_sparse_mm_refuses_parallel_edges() -> None:
+@CUDA
+@pytest.mark.cuda
+def test_sparse_trainable_gradients_work_on_cuda() -> None:
+    brain = random_connectome(2_000, 0.001, seed=92)
+    state = torch.randn(2_000, 8, device="cuda", requires_grad=True)
+    weight = torch.as_tensor(
+        brain.edge_attribute("weight"), dtype=torch.float32, device="cuda"
+    ).requires_grad_(True)
+    propagate("sparse_trainable", brain, state, weight).square().mean().backward()
+    assert weight.grad is not None and torch.isfinite(weight.grad).all()
+    assert state.grad is not None and torch.isfinite(state.grad).all()
+
+
+@pytest.mark.parametrize("backend", ["sparse_mm", "sparse_trainable"])
+def test_csr_backends_refuse_parallel_edges(backend: str) -> None:
     """CSR has one value per coordinate; its backward would misalign edge_weight."""
     from connectorch.exceptions import BackendError
 
@@ -164,7 +196,7 @@ def test_sparse_mm_refuses_parallel_edges() -> None:
         aggregate_parallel_edges=False,
     )
     with pytest.raises(BackendError, match="parallel edges"):
-        ConnectomeRNN(brain, weights="weight", backend="sparse_mm")
+        ConnectomeRNN(brain, weights="weight", backend=backend)
 
 
 def test_scatter_handles_parallel_edges() -> None:

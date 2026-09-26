@@ -55,7 +55,7 @@ class Classifier(nn.Module):
         return self.readout(self.core(x)[:, -1, :])
 
 
-@pytest.mark.parametrize("backend", ["scatter", "dense"])
+@pytest.mark.parametrize("backend", ["scatter", "sparse_trainable", "dense"])
 def test_a_connectome_constrained_network_learns(backend: str) -> None:
     torch.manual_seed(SEED)
     generator = torch.Generator().manual_seed(SEED)

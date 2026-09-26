@@ -63,7 +63,7 @@ class SparseMMPropagator(Propagator):
             if bool(duplicated.any()):
                 count = int(duplicated.sum())
                 raise BackendError(
-                    f'backend="sparse_mm" cannot represent parallel edges: '
+                    f'backend="{self.backend_name}" cannot represent parallel edges: '
                     f"{count:,} edge(s) repeat a (source, target) pair that another "
                     "edge already occupies.\n"
                     "A CSR adjacency has one value per coordinate, so gradients "

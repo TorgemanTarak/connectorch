@@ -82,8 +82,10 @@ if your question is about paths and effective connectivity rather than training.
 
 ## PyTorch behaviour this library works around
 
-The choice of `scatter` as the training backend is forced by an open upstream bug,
-not by preference. See [Sparse backends](backends.md) for the measurements.
+The default choice of `scatter` avoids an open upstream bug in ordinary sparse
+autograd. The optional `sparse_trainable` backend supplies a custom sampled
+backward for workloads where scatter's `[edges, batch]` tensors are too large.
+See [Sparse backends](backends.md) for details and measurements.
 
 - **Dense intermediate in `torch.sparse.mm` backward**:
   [pytorch/pytorch#41128](https://github.com/pytorch/pytorch/issues/41128),

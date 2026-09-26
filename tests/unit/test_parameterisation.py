@@ -195,9 +195,10 @@ def test_unlabelled_neurons_are_not_lumped_into_one_group() -> None:
 # ----------------------------------------------------------------------
 
 
-def test_gradients_reach_the_gain(brain: Connectome) -> None:
+@pytest.mark.parametrize("backend", ["scatter", "sparse_trainable"])
+def test_gradients_reach_the_gain(brain: Connectome, backend: str) -> None:
     weights = BiologicalWeights(brain, share_by="cell_type", dale=True)
-    core = ConnectomeRNN(brain, weights=weights, leak=0.4)
+    core = ConnectomeRNN(brain, weights=weights, leak=0.4, backend=backend)
     core(torch.randn(4, brain.num_nodes), steps=3).square().mean().backward()
     assert weights.raw_gain.grad is not None
     assert torch.isfinite(weights.raw_gain.grad).all()

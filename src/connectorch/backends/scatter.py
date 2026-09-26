@@ -48,3 +48,10 @@ class ScatterPropagator(Propagator):
             (self.num_nodes, h.shape[1]), dtype=messages.dtype, device=messages.device
         )
         return out.index_add(0, self.target, messages)
+
+    def activation_bytes(self, batch: int, steps: int, itemsize: int) -> int:
+        """Gathered source states and weighted messages are both ``[E, B]``."""
+        return 2 * self.num_edges * batch * steps * itemsize
+
+    def activation_summary(self, batch: int, steps: int) -> str:
+        return f"{self.num_edges:,} edges x batch {batch} x {steps} steps x 2 tensors"

@@ -106,6 +106,7 @@ connectome has an edge.
 | backend | what it does | when |
 |---|---|---|
 | `scatter` | gather source states, `index_add` into targets | **training** |
+| `sparse_trainable` | CSR forward, sampled sparse edge-gradient backward | opt-in training when scatter activations dominate |
 | `sparse_mm` | CSR adjacency, `torch.sparse.mm` | inference, fixed weights |
 | `metal_csr` | native Metal CSR forward and backward kernels | explicit Apple GPU training/inference; CPU reference |
 | `dense` | materialises `[N, N]` | correctness oracle, tiny graphs only |
@@ -123,6 +124,13 @@ with 500k edges and batch 32:
 A dense float32 `[50,000 x 50,000]` is 9.3 GiB, which is what that memory
 figure is. Run `python benchmarks/sparse_backends.py` to reproduce the whole table;
 `benchmarks/gb10-results.jsonl` holds the numbers above.
+
+The opt-in `sparse_trainable` backend removes both the dense `[N, N]` gradient
+and scatter's `[edges, batch]` tensors. On an RTX 5090 at N=100,000 with one
+million edges and batch 32, it ran forward+backward in **0.461 ms** at **0.123
+GiB**, versus scatter at 1.489 ms and 0.459 GiB. At N=10,000 and batch 1,
+scatter remained faster, so `auto` deliberately stays unchanged. The complete
+run is in `benchmarks/rtx5090-sparse-trainable.jsonl`.
 
 ### Apple GPU
 
@@ -152,6 +160,10 @@ batch 4 over 8 steps, and 104 GiB at batch 32 over 16. `model.activation_bytes(
 batch, steps)` computes it up front, and the model warns before a call that would
 claim more than half the device's free memory, rather than letting you find out
 three hours into a run.
+
+`sparse_trainable` instead saves one `[num_nodes, batch]` state per step for its
+sampled backward. This can be much smaller on high-degree graphs, while still
+remaining linear in the unrolled sequence length.
 
 `metal_csr` avoids these edge-by-batch message tensors as well as dense adjacency
 matrices. Recurrent states, output trajectories, parameters, graph caches,

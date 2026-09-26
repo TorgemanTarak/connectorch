@@ -26,7 +26,7 @@ from connectorch.exceptions import ConnectorchError
 
 SIZES = [(1_000, 10_000), (10_000, 100_000), (100_000, 1_000_000)]
 BATCHES = [1, 32]
-BACKENDS = ["dense", "sparse_mm", "scatter"]
+BACKENDS = ["dense", "sparse_mm", "sparse_trainable", "scatter"]
 
 #: Skip the dense backend above this many nodes; it allocates N^2.
 DENSE_NODE_LIMIT = 4_000

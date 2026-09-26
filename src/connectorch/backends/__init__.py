@@ -5,6 +5,7 @@ from .dense import DensePropagator
 from .metal_csr import MetalCSRPropagator
 from .scatter import ScatterPropagator
 from .sparse_mm import SparseMMPropagator
+from .sparse_trainable import SparseTrainablePropagator
 
 __all__ = [
     "Propagator",
@@ -14,4 +15,5 @@ __all__ = [
     "MetalCSRPropagator",
     "ScatterPropagator",
     "SparseMMPropagator",
+    "SparseTrainablePropagator",
 ]

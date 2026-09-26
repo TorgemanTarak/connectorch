@@ -15,6 +15,7 @@ that is the orientation both sparse matrix multiplication and `index_add` want.
 | backend | implementation | role |
 |---|---|---|
 | `scatter` | `h[source] * w`, then `index_add_` into targets | default training backend |
+| `sparse_trainable` | CSR SpMM forward, sampled edge-gradient backward | opt-in memory-efficient training |
 | `sparse_mm` | CSR adjacency, `torch.sparse.mm` | fast forward, fixed weights |
 | `metal_csr` | native Metal CSR forward and backward kernels | explicit Apple GPU training or inference; CPU reference |
 | `dense` | materialises `[N, N]` | correctness oracle, tiny graphs |
@@ -75,7 +76,7 @@ assert model.edge_weight.grad is not None
 The same backend has a CPU reference path accepting float32 or float64. Construct
 the model on CPU, or move it to CPU, to compare outputs and gradients using
 numerical tolerances. This is an explicit reference device, not an MPS fallback.
-See [the runnable example](../examples/apple_metal.py):
+See [the runnable example](https://github.com/us/connectorch/blob/main/examples/apple_metal.py):
 
 ```bash
 PYTORCH_ENABLE_MPS_FALLBACK=0 python examples/apple_metal.py
@@ -137,7 +138,8 @@ matrix is not a coincidence. At N=164,587 the same path asks for 100.9 GiB and
 fails.
 
 The default therefore uses **scatter for trainable weights and CSR for fixed
-weights**. `backend="auto"` makes that choice; it does not select `metal_csr`.
+weights**. `backend="auto"` makes that choice; it does not select
+`sparse_trainable` or `metal_csr`.
 
 Requesting `sparse_mm` with trainable weights on a large graph is refused before
 anything is allocated:
@@ -149,6 +151,32 @@ gradients, and its backward pass materialises a dense adjacency gradient for
 A torch.float32 [164,587 x 164,587] adjacency needs 100.9 GiB.
 Use backend="scatter", which allocates O(E) instead.
 ```
+
+## Opt-in trainable CSR
+
+`backend="sparse_trainable"` keeps the CSR forward but supplies a custom
+backward. It computes state gradients with transposed sparse matrix
+multiplication and edge-value gradients only at the existing CSR coordinates
+with sampled dense-dense multiplication. The conceptual dense `[N, N]`
+gradient is never materialised, and the backend does not build scatter's
+`[edges, batch]` message tensors.
+
+```python
+model = ct.nn.ConnectomeRNN(                           # doctest: +SKIP
+    brain, weights="trainable", backend="sparse_trainable"
+)
+```
+
+This backend is explicit because speed depends on graph size, batch size,
+device and PyTorch version. On an RTX 5090 with torch 2.14.0+cu130, N=100,000,
+one million edges and batch 32, one forward+backward step took 0.461 ms and
+peaked at 0.123 GiB, against scatter's 1.489 ms and 0.459 GiB. At N=10,000 and
+batch 1, scatter was faster: 0.218 ms against 0.320 ms. The complete run is in
+`benchmarks/rtx5090-sparse-trainable.jsonl`.
+
+The implementation requires unique source/target pairs and a PyTorch build in
+which `torch.sparse.sampled_addmm` supports CSR tensors on the selected CPU or
+CUDA device. Unsupported runtimes fail with a backend-specific error.
 
 ## Reproducing these numbers
 
@@ -172,8 +200,19 @@ for the backward pass, so a training call holds
 On MaleCNS that is about 6.5 GiB at batch 4 over 8 steps, and 104 GiB at batch 32
 over 16 steps. `ConnectomeRNN.activation_bytes(batch, steps)` computes it, the
 model warns before a call that would exceed half the device's free memory, and
-`torch.no_grad()` avoids those saved backward tensors. This formula measures
-scatter message activations, not total model memory or `metal_csr` memory.
+`torch.no_grad()` avoids those saved backward tensors.
+
+`sparse_trainable` conservatively reports
+
+```
+num_nodes * batch * steps * itemsize
+```
+
+for the recurrent states retained by its custom backward. The method reports
+the selected backend's estimate. It does not include all recurrent states,
+outputs, parameters, gradients, optimizer state or temporary workspace.
+`metal_csr` reports no edge-by-batch activation estimate, which does not mean
+that total training memory is zero.
 To train longer sequences than fit,
 run them in segments and carry the state forward:
 
@@ -201,8 +240,8 @@ run ([pytorch#108569](https://github.com/pytorch/pytorch/issues/108569)).
 
 A CSR tensor holds one value per coordinate. If you build a connectome with
 `aggregate_parallel_edges=False` and it contains two edges between the same pair,
-`sparse_mm` refuses it: its backward would return one gradient per *unique*
-coordinate, which no longer lines up with `edge_weight`. `metal_csr` also
-requires unique source/target pairs and rejects parallel edges. The default
-`Connectome` construction aggregates them before compilation. `scatter` handles
-unaggregated parallel edges natively.
+`sparse_mm` and `sparse_trainable` refuse it: their CSR value arrays would no
+longer line up with `edge_weight`. `metal_csr` also requires unique
+source/target pairs and rejects parallel edges. The default `Connectome`
+construction aggregates them before compilation. `scatter` handles unaggregated
+parallel edges natively.

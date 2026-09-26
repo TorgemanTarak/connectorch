@@ -58,6 +58,14 @@ class Propagator(nn.Module):
         """Propagate ``h`` (``[N, B]``) one step and return the messages (``[N, B]``)."""
         raise NotImplementedError
 
+    def activation_bytes(self, batch: int, steps: int, itemsize: int) -> int:
+        """Estimate backend tensors saved for backward across recurrent steps."""
+        return 0
+
+    def activation_summary(self, batch: int, steps: int) -> str:
+        """Describe the tensors included in :meth:`activation_bytes`."""
+        return "no backend-specific saved activation estimate"
+
     def rebuild(self, edge_index: Tensor) -> None:
         """Recompute any derived layout after the topology changed.
 
@@ -130,7 +138,8 @@ def build_propagator(
     Parameters
     ----------
     name:
-        ``"auto"``, ``"dense"``, ``"sparse_mm"``, ``"scatter"`` or ``"metal_csr"``.
+        ``"auto"``, ``"dense"``, ``"sparse_mm"``, ``"sparse_trainable"``,
+        ``"scatter"`` or ``"metal_csr"``.
     trainable:
         Whether the edge weights will require gradients. This decides ``"auto"``
         and gates the backends that cannot produce gradients cheaply.
@@ -145,7 +154,13 @@ def build_propagator(
     0.24 GiB through scatter, where a dense float32 ``[N, N]`` is 9.3 GiB. Forward
     only, CSR is the fastest option at 0.16 ms against scatter's 1.76 ms.
     """
-    from . import dense, metal_csr, scatter, sparse_mm  # noqa: F401 (registration side effect)
+    from . import (  # noqa: F401 (registration side effect)
+        dense,
+        metal_csr,
+        scatter,
+        sparse_mm,
+        sparse_trainable,
+    )
 
     if name == "auto":
         name = "scatter" if trainable else "sparse_mm"

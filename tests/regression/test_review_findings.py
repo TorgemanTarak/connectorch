@@ -18,7 +18,7 @@ import torch
 from connectorch import Connectome, ConnectomeValidationError, ConnectorchError
 from connectorch.nn import ConnectomeRNN
 
-BACKENDS = ["dense", "sparse_mm", "scatter"]
+BACKENDS = ["dense", "sparse_mm", "sparse_trainable", "scatter"]
 
 
 def test_string_ids_survive_a_save_and_reload(tmp_path) -> None:
