@@ -178,6 +178,11 @@ The implementation requires unique source/target pairs and a PyTorch build in
 which `torch.sparse.sampled_addmm` supports CSR tensors on the selected CPU or
 CUDA device. Unsupported runtimes fail with a backend-specific error.
 
+Sparse kernels run with autocast disabled, preserving the float32 or float64
+model dtype for outputs and gradients even inside a CPU or CUDA autocast region.
+This allows a float32 connectome to participate in mixed-precision training;
+it does not add float16 or bfloat16 sparse-kernel support.
+
 ## Reproducing these numbers
 
 ```bash

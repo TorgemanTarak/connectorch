@@ -98,6 +98,35 @@ def test_trainable_weights_receive_finite_gradients(small: Connectome) -> None:
     assert torch.count_nonzero(grad) > 0
 
 
+@pytest.mark.parametrize(
+    ("device", "amp_dtype"),
+    [
+        ("cpu", torch.bfloat16),
+        pytest.param("cuda", torch.float16, marks=[CUDA, pytest.mark.cuda]),
+        pytest.param("cuda", torch.bfloat16, marks=[CUDA, pytest.mark.cuda]),
+    ],
+)
+def test_sparse_trainable_recurrence_under_autocast_matches_scatter(
+    small: Connectome, device: str, amp_dtype: torch.dtype
+) -> None:
+    """Mixed precision must allow input injection and backpropagation through time."""
+    x = torch.linspace(-1, 1, 2 * small.num_nodes, device=device).reshape(2, -1)
+    x.requires_grad_(True)
+    results = []
+    for backend in ("scatter", "sparse_trainable"):
+        model = ConnectomeRNN(
+            small, weights="trainable", initializer="weight", backend=backend, device=device
+        )
+        with torch.autocast(device, dtype=amp_dtype):
+            output = model(x, steps=5)
+            loss = output.square().mean()
+        gradients = torch.autograd.grad(loss, (model.edge_weight, x))
+        assert output.dtype == torch.float32
+        results.append((output, *gradients))
+
+    torch.testing.assert_close(results[1], results[0])
+
+
 def test_fixed_weights_are_not_parameters(small: Connectome) -> None:
     model = ConnectomeRNN(small, weights="weight")
     assert list(model.parameters()) == []

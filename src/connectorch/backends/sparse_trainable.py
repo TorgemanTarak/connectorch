@@ -41,7 +41,10 @@ class _SparseTrainableMM(torch.autograd.Function):
         )
         ctx.save_for_backward(crow_indices, col_indices, values, state)
         ctx.num_nodes = num_nodes
-        return torch.sparse.mm(adjacency, state)
+        # Keep the output and saved state in the same dtype. Autocast can lower
+        # SpMM's output even though sampled_addmm needs the original precision.
+        with torch.autocast(device_type=values.device.type, enabled=False):
+            return torch.sparse.mm(adjacency, state)
 
     @staticmethod
     def backward(
@@ -56,19 +59,21 @@ class _SparseTrainableMM(torch.autograd.Function):
             check_invariants=False,
         )
         grad_values = grad_state = None
-        if ctx.needs_input_grad[2]:
-            try:
-                # beta=0 means adjacency's values only provide the sparsity pattern.
-                grad_values = torch.sparse.sampled_addmm(
-                    adjacency, grad_output, state.transpose(0, 1), beta=0
-                ).values()
-            except RuntimeError as error:
-                raise BackendError(
-                    'backend="sparse_trainable" needs torch.sparse.sampled_addmm '
-                    f"support for CSR tensors on {values.device.type}: {error}"
-                ) from error
-        if ctx.needs_input_grad[3]:
-            grad_state = torch.sparse.mm(adjacency.transpose(0, 1), grad_output)
+        # Backward must use the forward dtype even if the caller leaves autocast on.
+        with torch.autocast(device_type=values.device.type, enabled=False):
+            if ctx.needs_input_grad[2]:
+                try:
+                    # beta=0 means adjacency's values only provide the sparsity pattern.
+                    grad_values = torch.sparse.sampled_addmm(
+                        adjacency, grad_output, state.transpose(0, 1), beta=0
+                    ).values()
+                except RuntimeError as error:
+                    raise BackendError(
+                        'backend="sparse_trainable" needs torch.sparse.sampled_addmm '
+                        f"support for CSR tensors on {values.device.type}: {error}"
+                    ) from error
+            if ctx.needs_input_grad[3]:
+                grad_state = torch.sparse.mm(adjacency.transpose(0, 1), grad_output)
         return None, None, grad_values, grad_state, None
 
 

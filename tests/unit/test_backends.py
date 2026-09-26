@@ -82,6 +82,38 @@ def test_sparse_trainable_state_gradient_agrees_with_dense() -> None:
     assert torch.allclose(gradients["sparse_trainable"], gradients["dense"], atol=1e-10)
 
 
+@pytest.mark.parametrize(
+    ("device", "amp_dtype"),
+    [
+        ("cpu", torch.bfloat16),
+        pytest.param("cuda", torch.float16, marks=[CUDA, pytest.mark.cuda]),
+        pytest.param("cuda", torch.bfloat16, marks=[CUDA, pytest.mark.cuda]),
+    ],
+)
+@pytest.mark.parametrize("backward_under_autocast", [False, True])
+def test_sparse_trainable_autocast_matches_scatter(
+    device: str, amp_dtype: torch.dtype, backward_under_autocast: bool
+) -> None:
+    """Autocast must preserve the sparse kernels' dtype in both directions."""
+    brain = random_connectome(30, 0.1, seed=93)
+    weight = torch.as_tensor(
+        brain.edge_attribute("weight"), dtype=torch.float32, device=device
+    ).requires_grad_(True)
+    state = torch.linspace(-1, 1, 150, device=device).reshape(30, 5).requires_grad_(True)
+    reference = propagate("scatter", brain, state, weight)
+    expected = torch.autograd.grad(reference.square().mean(), (weight, state))
+
+    with torch.autocast(device, dtype=amp_dtype):
+        output = propagate("sparse_trainable", brain, state, weight)
+        loss = output.square().mean()
+    with torch.autocast(device, dtype=amp_dtype, enabled=backward_under_autocast):
+        actual = torch.autograd.grad(loss, (weight, state))
+
+    assert output.dtype == torch.float32
+    torch.testing.assert_close(output, reference)
+    torch.testing.assert_close(actual, expected)
+
+
 def test_shuffled_input_order_does_not_change_the_result() -> None:
     """Canonical edge ordering must make weights and edges impossible to misalign."""
     rng = np.random.default_rng(7)
